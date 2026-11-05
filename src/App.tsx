@@ -9,6 +9,7 @@ import {
   SampleLeadRequest,
 } from './types';
 import { StorageService } from './utils/storage';
+import { FirestoreService } from './services/firestoreSync';
 import { Header } from './components/Header';
 import { CutOffBanner } from './components/CutOffBanner';
 import { RouteBanner } from './components/RouteBanner';
@@ -25,13 +26,14 @@ import { Footer } from './components/Footer';
 import { PackageX, Sparkles, Gift } from 'lucide-react';
 
 export function App() {
-  // Primary persistent state from localStorage
+  // Primary state initialized from local cache
   const [products, setProducts] = useState<Product[]>(() => StorageService.getProducts());
   const [cart, setCart] = useState<CartItem[]>(() => StorageService.getCart());
   const [orders, setOrders] = useState<Order[]>(() => StorageService.getOrders());
   const [customers, setCustomers] = useState<Customer[]>(() => StorageService.getCustomers());
   const [settings, setSettings] = useState<CompanySettings>(() => StorageService.getSettings());
   const [isAdminAuthed, setIsAdminAuthed] = useState<boolean>(() => StorageService.getAdminAuth());
+  const [isCloudSynced, setIsCloudSynced] = useState<boolean>(true);
 
   // Search & Filtering state
   const [selectedCategory, setSelectedCategory] = useState<CategoryFilterType>('all');
@@ -46,6 +48,67 @@ export function App() {
   const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
   const [currentSuccessOrder, setCurrentSuccessOrder] = useState<Order | null>(null);
   const [currentWhatsAppUrl, setCurrentWhatsAppUrl] = useState<string>('');
+
+  // 1. Initialize Firestore & Subscribe to Real-Time Updates
+  useEffect(() => {
+    // Seed default data to Firestore if cloud collections are brand new
+    FirestoreService.seedInitialFirestoreData();
+
+    // Real-time listener for Products
+    const unsubProducts = FirestoreService.subscribeProducts(
+      (cloudProducts) => {
+        if (cloudProducts && cloudProducts.length > 0) {
+          setProducts(cloudProducts);
+          StorageService.saveProducts(cloudProducts);
+          setIsCloudSynced(true);
+        }
+      },
+      () => setIsCloudSynced(false)
+    );
+
+    // Real-time listener for Orders
+    const unsubOrders = FirestoreService.subscribeOrders(
+      (cloudOrders) => {
+        if (cloudOrders) {
+          setOrders(cloudOrders);
+          StorageService.saveOrders(cloudOrders);
+          setIsCloudSynced(true);
+        }
+      },
+      () => setIsCloudSynced(false)
+    );
+
+    // Real-time listener for Customers CRM
+    const unsubCustomers = FirestoreService.subscribeCustomers(
+      (cloudCustomers) => {
+        if (cloudCustomers && cloudCustomers.length > 0) {
+          setCustomers(cloudCustomers);
+          StorageService.saveCustomers(cloudCustomers);
+          setIsCloudSynced(true);
+        }
+      },
+      () => setIsCloudSynced(false)
+    );
+
+    // Real-time listener for Settings
+    const unsubSettings = FirestoreService.subscribeSettings(
+      (cloudSettings) => {
+        if (cloudSettings) {
+          setSettings(cloudSettings);
+          StorageService.saveSettings(cloudSettings);
+          setIsCloudSynced(true);
+        }
+      },
+      () => setIsCloudSynced(false)
+    );
+
+    return () => {
+      unsubProducts();
+      unsubOrders();
+      unsubCustomers();
+      unsubSettings();
+    };
+  }, []);
 
   // Save cart changes to localStorage
   useEffect(() => {
@@ -73,14 +136,22 @@ export function App() {
     StorageService.clearCart();
   };
 
-  // Handle Order Placed (With Auto-Capture to CRM Database)
+  // Handle Order Placed (With Real-Time Cloud Sync & CRM Auto-Capture)
   const handleOrderCompleted = (order: Order, whatsappUrl: string) => {
+    // 1. Local storage & state
     const updatedOrders = StorageService.addOrder(order);
     setOrders(updatedOrders);
 
-    // Auto-capture or update in CRM database
+    // 2. Auto-capture in CRM
     const updatedCustomers = StorageService.upsertCustomerFromOrder(order);
     setCustomers(updatedCustomers);
+
+    // 3. Cloud Firestore real-time sync
+    FirestoreService.saveOrder(order);
+    const matchedCustomer = updatedCustomers.find((c) => c.phone === order.phone);
+    if (matchedCustomer) {
+      FirestoreService.saveCustomer(matchedCustomer);
+    }
 
     handleClearCart();
     setIsCheckoutModalOpen(false);
@@ -98,8 +169,8 @@ export function App() {
   // Handle Lead Request (Public Floating Visit / Sample Form)
   const handleLeadRequestSubmit = (request: SampleLeadRequest) => {
     StorageService.addSampleRequest(request);
-    // Reload customers to reflect new lead in CRM
     setCustomers(StorageService.getCustomers());
+    FirestoreService.saveSampleRequest(request);
   };
 
   // Admin Actions
@@ -128,14 +199,16 @@ export function App() {
     const updated = [newProduct, ...products];
     setProducts(updated);
     StorageService.saveProducts(updated);
+    FirestoreService.saveProduct(newProduct);
   };
 
   const handleUpdateProduct = (updatedProduct: Product) => {
     const updated = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
     setProducts(updated);
     StorageService.saveProducts(updated);
+    FirestoreService.saveProduct(updatedProduct);
 
-    // Also update product inside cart if present
+    // Update product inside cart if present
     setCart((prev) =>
       prev.map((item) =>
         item.product.id === updatedProduct.id
@@ -149,6 +222,7 @@ export function App() {
     const updated = products.filter((p) => p.id !== productId);
     setProducts(updated);
     StorageService.saveProducts(updated);
+    FirestoreService.deleteProduct(productId);
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
@@ -156,42 +230,50 @@ export function App() {
     const defaults = StorageService.resetProducts();
     setProducts(defaults);
     setCart([]);
+    defaults.forEach((p) => FirestoreService.saveProduct(p));
   };
 
   const handleUpdateOrderStatus = (orderId: string, status: OrderStatus) => {
     const updated = StorageService.updateOrderStatus(orderId, status);
     setOrders(updated);
+    FirestoreService.updateOrderStatus(orderId, status);
   };
 
   const handleDeleteOrder = (orderId: string) => {
     const updated = StorageService.deleteOrder(orderId);
     setOrders(updated);
+    FirestoreService.deleteOrder(orderId);
   };
 
   const handleSaveSettings = (newSettings: CompanySettings) => {
     setSettings(newSettings);
     StorageService.saveSettings(newSettings);
+    FirestoreService.saveSettings(newSettings);
   };
 
   // Customer CRM Handlers
   const handleAddCustomer = (newCustomer: Customer) => {
     const updated = StorageService.addCustomer(newCustomer);
     setCustomers(updated);
+    FirestoreService.saveCustomer(newCustomer);
   };
 
   const handleUpdateCustomer = (updatedCustomer: Customer) => {
     const updated = StorageService.updateCustomer(updatedCustomer);
     setCustomers(updated);
+    FirestoreService.saveCustomer(updatedCustomer);
   };
 
   const handleDeleteCustomer = (customerId: string) => {
     const updated = StorageService.deleteCustomer(customerId);
     setCustomers(updated);
+    FirestoreService.deleteCustomer(customerId);
   };
 
   const handleResetCustomers = () => {
     const defaults = StorageService.resetCustomers();
     setCustomers(defaults);
+    defaults.forEach((c) => FirestoreService.saveCustomer(c));
   };
 
   // Filtered products calculation
@@ -231,8 +313,8 @@ export function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans antialiased">
-      {/* Top Header */}
-      <Header settings={settings} onOpenAdmin={handleOpenAdmin} />
+      {/* Top Header with Real-Time Cloud Sync Indicator */}
+      <Header settings={settings} onOpenAdmin={handleOpenAdmin} isCloudSynced={isCloudSynced} />
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6">

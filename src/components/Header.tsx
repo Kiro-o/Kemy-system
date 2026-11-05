@@ -1,14 +1,15 @@
 import React from 'react';
-import { Phone, MessageCircle, ShieldCheck, MapPin, Truck } from 'lucide-react';
+import { Phone, MessageCircle, ShieldCheck, MapPin, Truck, Cloud } from 'lucide-react';
 import { CompanySettings } from '../types';
 import { normalizeWhatsAppNumber } from '../utils/whatsapp';
 
 interface HeaderProps {
   settings: CompanySettings;
   onOpenAdmin: () => void;
+  isCloudSynced?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ settings, onOpenAdmin }) => {
+export const Header: React.FC<HeaderProps> = ({ settings, onOpenAdmin, isCloudSynced = true }) => {
   const directWhatsAppUrl = `https://wa.me/${normalizeWhatsAppNumber(settings.adminWhatsApp)}?text=${encodeURIComponent(
     `السلام عليكم، أتواصل معكم بخصوص طلبيات الجملة والتوريدات الغذائية من ${settings.companyName}`
   )}`;
@@ -22,6 +23,14 @@ export const Header: React.FC<HeaderProps> = ({ settings, onOpenAdmin }) => {
             <span className="inline-flex items-center justify-center bg-brand-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
               توزيع الإسكندرية
             </span>
+
+            {isCloudSynced && (
+              <span className="inline-flex items-center gap-1 bg-emerald-900/60 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded-md border border-emerald-500/30 font-bold">
+                <Cloud className="w-2.5 h-2.5 text-emerald-400" />
+                <span>سحابة Firestore متصلة</span>
+              </span>
+            )}
+
             <span className="truncate">{settings.freeDeliveryBadge}</span>
           </div>
 
@@ -84,4 +93,3 @@ export const Header: React.FC<HeaderProps> = ({ settings, onOpenAdmin }) => {
     </header>
   );
 };
-
