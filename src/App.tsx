@@ -8,6 +8,7 @@ import {
   Customer,
   SampleLeadRequest,
 } from './types';
+import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './data/initialData';
 import { StorageService } from './utils/storage';
 import { FirestoreService } from './services/firestoreSync';
 import { Header } from './components/Header';
@@ -26,12 +27,12 @@ import { Footer } from './components/Footer';
 import { PackageX, Sparkles, Gift } from 'lucide-react';
 
 export function App() {
-  // Primary state initialized from local cache
-  const [products, setProducts] = useState<Product[]>(() => StorageService.getProducts());
+  // Primary state: In-memory fallbacks, with Firebase Firestore as the Single Source of Truth
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [cart, setCart] = useState<CartItem[]>(() => StorageService.getCart());
-  const [orders, setOrders] = useState<Order[]>(() => StorageService.getOrders());
-  const [customers, setCustomers] = useState<Customer[]>(() => StorageService.getCustomers());
-  const [settings, setSettings] = useState<CompanySettings>(() => StorageService.getSettings());
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [settings, setSettings] = useState<CompanySettings>(INITIAL_SETTINGS);
   const [isAdminAuthed, setIsAdminAuthed] = useState<boolean>(() => StorageService.getAdminAuth());
   const [isCloudSynced, setIsCloudSynced] = useState<boolean>(true);
 
@@ -51,66 +52,56 @@ export function App() {
 
   // 1. Initialize Firestore & Subscribe to Real-Time Updates
   useEffect(() => {
-    // Seed default data to Firestore if cloud collections are brand new
+    // Seed default data to Firestore if cloud collections/documents are empty
     FirestoreService.seedInitialFirestoreData();
 
-    // Real-time listener for Products
+    // Real-time listener for Settings & Store Profile (Collection: settings, Doc: general)
+    const unsubSettings = FirestoreService.subscribeSettings(
+      (cloudSettings) => {
+        setSettings(cloudSettings);
+        setIsCloudSynced(true);
+      },
+      () => setIsCloudSynced(false)
+    );
+
+    // Real-time listener for Products collection
     const unsubProducts = FirestoreService.subscribeProducts(
       (cloudProducts) => {
         if (cloudProducts && cloudProducts.length > 0) {
           setProducts(cloudProducts);
-          StorageService.saveProducts(cloudProducts);
           setIsCloudSynced(true);
         }
       },
       () => setIsCloudSynced(false)
     );
 
-    // Real-time listener for Orders
+    // Real-time listener for Orders collection
     const unsubOrders = FirestoreService.subscribeOrders(
       (cloudOrders) => {
-        if (cloudOrders) {
-          setOrders(cloudOrders);
-          StorageService.saveOrders(cloudOrders);
-          setIsCloudSynced(true);
-        }
+        setOrders(cloudOrders);
+        setIsCloudSynced(true);
       },
       () => setIsCloudSynced(false)
     );
 
-    // Real-time listener for Customers CRM
+    // Real-time listener for Customers CRM collection
     const unsubCustomers = FirestoreService.subscribeCustomers(
       (cloudCustomers) => {
-        if (cloudCustomers && cloudCustomers.length > 0) {
-          setCustomers(cloudCustomers);
-          StorageService.saveCustomers(cloudCustomers);
-          setIsCloudSynced(true);
-        }
-      },
-      () => setIsCloudSynced(false)
-    );
-
-    // Real-time listener for Settings
-    const unsubSettings = FirestoreService.subscribeSettings(
-      (cloudSettings) => {
-        if (cloudSettings) {
-          setSettings(cloudSettings);
-          StorageService.saveSettings(cloudSettings);
-          setIsCloudSynced(true);
-        }
+        setCustomers(cloudCustomers);
+        setIsCloudSynced(true);
       },
       () => setIsCloudSynced(false)
     );
 
     return () => {
+      unsubSettings();
       unsubProducts();
       unsubOrders();
       unsubCustomers();
-      unsubSettings();
     };
   }, []);
 
-  // Save cart changes to localStorage
+  // Save user's browser cart to localStorage
   useEffect(() => {
     StorageService.saveCart(cart);
   }, [cart]);
@@ -136,22 +127,13 @@ export function App() {
     StorageService.clearCart();
   };
 
-  // Handle Order Placed (With Real-Time Cloud Sync & CRM Auto-Capture)
-  const handleOrderCompleted = (order: Order, whatsappUrl: string) => {
-    // 1. Local storage & state
-    const updatedOrders = StorageService.addOrder(order);
-    setOrders(updatedOrders);
+  // Handle Order Placed (Direct Real-Time Firestore Sync & CRM Auto-Capture)
+  const handleOrderCompleted = async (order: Order, whatsappUrl: string) => {
+    // 1. Write order directly to Firestore (orders collection)
+    await FirestoreService.saveOrder(order);
 
-    // 2. Auto-capture in CRM
-    const updatedCustomers = StorageService.upsertCustomerFromOrder(order);
-    setCustomers(updatedCustomers);
-
-    // 3. Cloud Firestore real-time sync
-    FirestoreService.saveOrder(order);
-    const matchedCustomer = updatedCustomers.find((c) => c.phone === order.phone);
-    if (matchedCustomer) {
-      FirestoreService.saveCustomer(matchedCustomer);
-    }
+    // 2. Auto-capture in CRM directly in Firestore (customers collection)
+    await FirestoreService.upsertCustomerFromOrder(order, customers);
 
     handleClearCart();
     setIsCheckoutModalOpen(false);
@@ -167,10 +149,8 @@ export function App() {
   };
 
   // Handle Lead Request (Public Floating Visit / Sample Form)
-  const handleLeadRequestSubmit = (request: SampleLeadRequest) => {
-    StorageService.addSampleRequest(request);
-    setCustomers(StorageService.getCustomers());
-    FirestoreService.saveSampleRequest(request);
+  const handleLeadRequestSubmit = async (request: SampleLeadRequest) => {
+    await FirestoreService.saveSampleRequest(request, customers);
   };
 
   // Admin Actions
@@ -195,20 +175,14 @@ export function App() {
     setIsAdminDashboardOpen(false);
   };
 
-  const handleAddProduct = (newProduct: Product) => {
-    const updated = [newProduct, ...products];
-    setProducts(updated);
-    StorageService.saveProducts(updated);
-    FirestoreService.saveProduct(newProduct);
+  const handleAddProduct = async (newProduct: Product) => {
+    await FirestoreService.saveProduct(newProduct);
   };
 
-  const handleUpdateProduct = (updatedProduct: Product) => {
-    const updated = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
-    setProducts(updated);
-    StorageService.saveProducts(updated);
-    FirestoreService.saveProduct(updatedProduct);
+  const handleUpdateProduct = async (updatedProduct: Product) => {
+    await FirestoreService.saveProduct(updatedProduct);
 
-    // Update product inside cart if present
+    // Update product inside local cart if present
     setCart((prev) =>
       prev.map((item) =>
         item.product.id === updatedProduct.id
@@ -218,62 +192,44 @@ export function App() {
     );
   };
 
-  const handleDeleteProduct = (productId: string) => {
-    const updated = products.filter((p) => p.id !== productId);
-    setProducts(updated);
-    StorageService.saveProducts(updated);
-    FirestoreService.deleteProduct(productId);
+  const handleDeleteProduct = async (productId: string) => {
+    await FirestoreService.deleteProduct(productId);
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
-  const handleResetProducts = () => {
-    const defaults = StorageService.resetProducts();
-    setProducts(defaults);
+  const handleResetProducts = async () => {
+    await FirestoreService.resetProducts();
     setCart([]);
-    defaults.forEach((p) => FirestoreService.saveProduct(p));
   };
 
-  const handleUpdateOrderStatus = (orderId: string, status: OrderStatus) => {
-    const updated = StorageService.updateOrderStatus(orderId, status);
-    setOrders(updated);
-    FirestoreService.updateOrderStatus(orderId, status);
+  const handleUpdateOrderStatus = async (orderId: string, status: OrderStatus) => {
+    await FirestoreService.updateOrderStatus(orderId, status);
   };
 
-  const handleDeleteOrder = (orderId: string) => {
-    const updated = StorageService.deleteOrder(orderId);
-    setOrders(updated);
-    FirestoreService.deleteOrder(orderId);
+  const handleDeleteOrder = async (orderId: string) => {
+    await FirestoreService.deleteOrder(orderId);
   };
 
-  const handleSaveSettings = (newSettings: CompanySettings) => {
+  const handleSaveSettings = async (newSettings: CompanySettings) => {
     setSettings(newSettings);
-    StorageService.saveSettings(newSettings);
-    FirestoreService.saveSettings(newSettings);
+    await FirestoreService.saveSettings(newSettings);
   };
 
   // Customer CRM Handlers
-  const handleAddCustomer = (newCustomer: Customer) => {
-    const updated = StorageService.addCustomer(newCustomer);
-    setCustomers(updated);
-    FirestoreService.saveCustomer(newCustomer);
+  const handleAddCustomer = async (newCustomer: Customer) => {
+    await FirestoreService.saveCustomer(newCustomer);
   };
 
-  const handleUpdateCustomer = (updatedCustomer: Customer) => {
-    const updated = StorageService.updateCustomer(updatedCustomer);
-    setCustomers(updated);
-    FirestoreService.saveCustomer(updatedCustomer);
+  const handleUpdateCustomer = async (updatedCustomer: Customer) => {
+    await FirestoreService.saveCustomer(updatedCustomer);
   };
 
-  const handleDeleteCustomer = (customerId: string) => {
-    const updated = StorageService.deleteCustomer(customerId);
-    setCustomers(updated);
-    FirestoreService.deleteCustomer(customerId);
+  const handleDeleteCustomer = async (customerId: string) => {
+    await FirestoreService.deleteCustomer(customerId);
   };
 
-  const handleResetCustomers = () => {
-    const defaults = StorageService.resetCustomers();
-    setCustomers(defaults);
-    defaults.forEach((c) => FirestoreService.saveCustomer(c));
+  const handleResetCustomers = async () => {
+    await FirestoreService.resetCustomers();
   };
 
   // Filtered products calculation
@@ -431,7 +387,7 @@ export function App() {
         isOpen={isAdminAuthModalOpen}
         onClose={() => setIsAdminAuthModalOpen(false)}
         onAuthenticated={handleAdminAuthenticated}
-        correctPin={settings.adminPin}
+        correctPin={settings.adminPin || '1980'}
       />
 
       {/* Full Autonomous Admin Operations Dashboard */}

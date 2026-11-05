@@ -12,7 +12,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
   isOpen,
   onClose,
   onAuthenticated,
-  correctPin,
+  correctPin = '1980',
 }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
@@ -41,7 +41,8 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
   };
 
   const verifyPin = (candidatePin: string) => {
-    if (candidatePin === correctPin) {
+    const targetPin = (correctPin && correctPin.trim()) ? correctPin.trim() : '1980';
+    if (candidatePin === targetPin) {
       onAuthenticated();
       setPin('');
       setError(false);
@@ -72,7 +73,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
 
           <h3 className="text-lg font-black text-white">لوحة تحكم إدارة التوريدات</h3>
           <p className="text-xs text-slate-400 mt-1">
-            أدخل رمز المرور السري (الافتراضي: <span className="font-mono text-amber-400 font-bold">1234</span>)
+            أدخل رمز المرور السري (الافتراضي: <span className="font-mono text-amber-400 font-bold">{correctPin || '1980'}</span>)
           </p>
 
           {/* PIN Indicators */}

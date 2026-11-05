@@ -256,7 +256,7 @@ export const INITIAL_SETTINGS: CompanySettings = {
   supportPhone: '01000000000',
   minOrderAmount: 0, // 0 EGP: Zero minimum order restrictions
   freeDeliveryBadge: '🚚 التوصيل مجاناً لأي كمية بدون حد أدنى لباب المحل - الدفع نقداً عند الاستلام مع السائق',
-  adminPin: '1234',
+  adminPin: '1980',
   routeSchedules: INITIAL_ROUTE_SCHEDULES,
   cutOffHour: 21 // 9:00 PM
 };

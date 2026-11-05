@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Building2,
   Phone,
@@ -22,19 +22,31 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   settings,
   onSaveSettings,
 }) => {
-  const [formData, setFormData] = useState<CompanySettings>({ ...settings });
+  const [formData, setFormData] = useState<CompanySettings>({
+    ...settings,
+    adminPin: settings.adminPin || '1980',
+  });
   const [pinChange, setPinChange] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Sync form state whenever live settings update from Firestore doc settings/general
+  useEffect(() => {
+    setFormData({
+      ...settings,
+      adminPin: settings.adminPin || '1980',
+    });
+  }, [settings]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
 
-    const updated = {
+    const updated: CompanySettings = {
       ...formData,
-      adminPin: pinChange.trim().length === 4 ? pinChange.trim() : formData.adminPin,
+      adminPin: pinChange.trim().length === 4 ? pinChange.trim() : (formData.adminPin || '1980'),
     };
 
     onSaveSettings(updated);
+    setPinChange('');
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
   };
@@ -249,7 +261,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
         <div className="max-w-xs text-xs space-y-1">
           <label className="block font-bold text-slate-700">
-            تغيير رمز PIN الحالي ({formData.adminPin})
+            تغيير رمز PIN الحالي ({formData.adminPin || '1980'})
           </label>
           <input
             type="password"
